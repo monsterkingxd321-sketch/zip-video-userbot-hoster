@@ -30,7 +30,8 @@ ENV DATA_DIR=/data \
     PORT=8080
 
 EXPOSE 8080
-VOLUME ["/data"]
+# Railway rejects Dockerfile VOLUME instructions. Mount a Railway Volume at
+# /data through the service settings (Docker Compose still uses app_data).
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
     CMD python -c "import os,urllib.request; p=os.getenv('PORT','8080'); urllib.request.urlopen(f'http://127.0.0.1:{p}/healthz', timeout=3)"
