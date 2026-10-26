@@ -49,17 +49,32 @@ def normalize_phone(raw: str) -> str:
     return f"+{stripped}"
 
 
-def normalize_login_code(raw: str) -> str:
+def normalize_login_code(raw: str, *, allow_words: bool = False) -> str:
     """Normalize a login code.
 
-    Telegram codes are shown as e.g. ``1 2 3 4 5`` on some clients and may be
-    pasted with dashes or non-breaking spaces, so *all* unicode whitespace and
-    common separators are removed before validation.
+    Telegram codes are usually digits shown as e.g. ``1 2 3 4 5``, so *all*
+    unicode whitespace and common separators are removed before validation.
+
+    Telegram can also deliver a *secret word* or *secret phrase* by SMS
+    (``SentCodeTypeSmsWord`` / ``SentCodeTypeSmsPhrase``). In that case the
+    spaces inside the phrase are significant, so they are collapsed to one
+    space instead of being removed.
     """
     if raw is None:
         raise InvalidCodeError("empty code")
     text = unicodedata.normalize("NFKC", str(raw))
     text = text.replace("\u200b", "").replace("\ufeff", "")
+
+    if allow_words:
+        text = _WHITESPACE.sub(" ", text).strip()
+        if not text:
+            raise InvalidCodeError("empty code")
+        # Secret words/phrases are human-readable words. Keep apostrophes and
+        # hyphens, reject HTML/control characters, and cap the length.
+        if not re.fullmatch(r"[\w'’\- ]{1,100}", text, re.UNICODE):
+            raise InvalidCodeError("login word or phrase contains unsupported characters")
+        return text
+
     text = _WHITESPACE.sub("", text)
     text = text.replace("-", "").replace(".", "").replace("_", "")
     text = text.strip()
@@ -106,6 +121,8 @@ class LoginResult:
     message: str = ""
     retry_after: float = 0.0
     attempts_left: int = 0
+    delivery: Optional[str] = None
+    next_delivery: Optional[str] = None
     account_user_id: Optional[int] = None
     account_username: Optional[str] = None
 
@@ -130,6 +147,7 @@ class PendingLogin:
     phone: str
     phone_code_hash: str = ""
     state: LoginState = LoginState.AWAITING_CODE
+    delivery: Optional[str] = None
     transport: object = None
     created_at: float = field(default_factory=time.monotonic)
     ttl_seconds: float = 900.0

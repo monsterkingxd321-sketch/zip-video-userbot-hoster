@@ -62,8 +62,14 @@ class FakeTransport:
     def dc_id(self) -> Optional[int]:
         return 2
 
-    async def send_code_request(self, phone: str) -> CodeRequestResult:
-        return CodeRequestResult(phone_code_hash="hash")
+    async def send_code_request(
+        self, phone: str, *, force_sms: bool = False
+    ) -> CodeRequestResult:
+        return CodeRequestResult(
+            phone_code_hash="hash",
+            delivery="sms" if force_sms else "app",
+            next_delivery="sms",
+        )
 
     async def sign_in_with_code(self, phone: str, code: str, phone_code_hash: str) -> AccountInfo:
         return self.account

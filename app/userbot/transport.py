@@ -54,10 +54,11 @@ class AccountRevokedError(PermanentTransportError):
 class FloodWaitSignal(TransportError):
     """Telegram asked us to wait; carries the exact number of seconds."""
 
-    def __init__(self, seconds: float, *, method: str = "") -> None:
+    def __init__(self, seconds: float, *, method: str = "", code: str = "") -> None:
         super().__init__(f"FloodWait {seconds}s on {method or 'request'}")
         self.seconds = float(seconds)
         self.method = method
+        self.code = code
 
 
 class PasswordRequiredSignal(TransportError):
@@ -124,6 +125,9 @@ class AccountInfo:
 @dataclass(frozen=True)
 class CodeRequestResult:
     phone_code_hash: str
+    # Safe delivery labels: app, sms, call, flash_call, email, email_setup, ...
+    delivery: Optional[str] = None
+    next_delivery: Optional[str] = None
     next_type: Optional[str] = None
     timeout: Optional[int] = None
 
@@ -225,7 +229,9 @@ class UserbotTransport(Protocol):
     def dc_id(self) -> Optional[int]: ...
 
     # -- login flow -------------------------------------------------------
-    async def send_code_request(self, phone: str) -> CodeRequestResult: ...
+    async def send_code_request(
+        self, phone: str, *, force_sms: bool = False
+    ) -> CodeRequestResult: ...
 
     async def sign_in_with_code(self, phone: str, code: str, phone_code_hash: str) -> AccountInfo: ...
 

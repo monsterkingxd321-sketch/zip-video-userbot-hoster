@@ -67,12 +67,39 @@ def error_code(exc: BaseException) -> str:
     return re.sub(r"(?<!^)(?=[A-Z])", "_", name).upper()
 
 
+def sent_code_delivery(value: Any) -> Optional[str]:
+    """Map a Telethon ``SentCodeType*`` object to a safe delivery label.
+
+    The label is shown to the user so they know where to look for the login
+    code (Telegram app, SMS, call, email, ...). It never contains a code.
+    """
+    if value is None:
+        return None
+    return {
+        "SentCodeTypeApp": "app",
+        "SentCodeTypeSms": "sms",
+        "SentCodeTypeCall": "call",
+        "SentCodeTypeFlashCall": "flash_call",
+        "SentCodeTypeMissedCall": "missed_call",
+        "SentCodeTypeEmailCode": "email",
+        "SentCodeTypeSetUpEmailRequired": "email_setup",
+        "SentCodeTypeFragmentSms": "fragment_sms",
+        "SentCodeTypeFirebaseSms": "firebase_sms",
+        "SentCodeTypeSmsWord": "sms_word",
+        "SentCodeTypeSmsPhrase": "sms_phrase",
+    }.get(type(value).__name__)
+
+
 def map_exception(exc: BaseException, *, method: str) -> BaseException:
     """Translate Telethon exceptions into the transport error taxonomy."""
     if isinstance(exc, FloodWaitError):
-        return FloodWaitSignal(getattr(exc, "seconds", 0) or 0, method=method)
+        return FloodWaitSignal(
+            getattr(exc, "seconds", 0) or 0, method=method, code=error_code(exc)
+        )
     if isinstance(exc, tg_errors.FloodPremiumWaitError):  # type: ignore[attr-defined]
-        return FloodWaitSignal(getattr(exc, "seconds", 0) or 0, method=method)
+        return FloodWaitSignal(
+            getattr(exc, "seconds", 0) or 0, method=method, code=error_code(exc)
+        )
     if isinstance(exc, SessionPasswordNeededError):
         return PasswordRequiredSignal("two-step verification is enabled")
 
@@ -83,7 +110,7 @@ def map_exception(exc: BaseException, *, method: str) -> BaseException:
         if code in TRANSIENT_ERROR_CODES or isinstance(exc, tg_errors.ServerError):
             return TransientTransportError(f"{method}: {code}")
         if code in ("FLOOD_PREMIUM_WAIT", "FLOOD_WAIT"):
-            return FloodWaitSignal(0, method=method)
+            return FloodWaitSignal(0, method=method, code=code)
         return PermanentTransportError(code, f"{method}: {type(exc).__name__}")
 
     if isinstance(exc, (ConnectionError, TimeoutError, OSError, asyncio.TimeoutError)):
@@ -187,14 +214,19 @@ class TelethonTransport(UserbotTransport):
         return getattr(self._client.session, "dc_id", None)
 
     # -- login ------------------------------------------------------------
-    async def send_code_request(self, phone: str) -> CodeRequestResult:
+    async def send_code_request(
+        self, phone: str, *, force_sms: bool = False
+    ) -> CodeRequestResult:
         result = await self._guard(
-            "send_code_request", self._client.send_code_request(phone, force_sms=False)
+            "send_code_request",
+            self._client.send_code_request(phone, force_sms=force_sms),
         )
+        next_type = getattr(result, "next_type", None)
         return CodeRequestResult(
             phone_code_hash=result.phone_code_hash,
-            next_type=getattr(getattr(result, "next_type", None), "__class__", None)
-            and type(result.next_type).__name__,
+            delivery=sent_code_delivery(getattr(result, "type", None)),
+            next_delivery=sent_code_delivery(next_type),
+            next_type=type(next_type).__name__ if next_type is not None else None,
             timeout=getattr(result, "timeout", None),
         )
 
@@ -642,5 +674,6 @@ __all__ = [
     "TelethonTransport",
     "error_code",
     "map_exception",
+    "sent_code_delivery",
     "MAX_PART_SIZE_KB",
 ]

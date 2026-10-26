@@ -55,6 +55,27 @@ def test_missing_required_variable_is_rejected(monkeypatch, tmp_path):
         Settings(_env_file=None)
 
 
+def test_invalid_telegram_api_hash_is_rejected(monkeypatch, tmp_path):
+    _apply_env(monkeypatch, DATA_DIR=str(tmp_path), TELEGRAM_API_HASH="not-a-hash")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_example_telegram_api_credentials_are_detected(monkeypatch, tmp_path):
+    _apply_env(monkeypatch, DATA_DIR=str(tmp_path))
+    settings = Settings(_env_file=None)
+    assert settings.telegram_api_looks_like_example is True
+
+    _apply_env(
+        monkeypatch,
+        DATA_DIR=str(tmp_path),
+        TELEGRAM_API_ID="987654",
+        TELEGRAM_API_HASH="fedcba9876543210fedcba9876543210",
+    )
+    realish = Settings(_env_file=None)
+    assert realish.telegram_api_looks_like_example is False
+
+
 def test_invalid_encryption_key_is_rejected(monkeypatch, tmp_path):
     _apply_env(
         monkeypatch,

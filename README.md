@@ -110,8 +110,9 @@ python -m app.main
 ```
 
 Then open the control bot, send `/start`, add your Telegram user ID to
-`ADMIN_IDS`, and use **Connect Account**. After the account is connected, send a
-ZIP document in any chat where that account can post, and reply to it with:
+`ADMIN_IDS`, and use `/connect` or **Connect Account**. After the account is
+connected, send a ZIP document in any chat where that account can post, and reply
+to it with:
 
 ```text
 /unzip
@@ -122,6 +123,26 @@ ZIP document in any chat where that account can post, and reply to it with:
 `/unzip retry` starts a new attempt for an archive that was processed before. A
 new attempt sends the archive's videos again; it is not a "resume one file" flag.
 
+### Account connection and OTP troubleshooting
+
+- Phone entry is **manual only**: type the full international number, including
+  `+` and the country code (for example `+919876543210`). Contact sharing is
+  deliberately disabled; the bot never asks for your address book.
+- After requesting a code, the bot says where Telegram delivered it: Telegram app,
+  SMS, call, flash call, email, secret word or secret phrase. A code sent inside
+  the Telegram app is in the chat named **Telegram** on an already logged-in
+  device; it is not an SMS. A secret word/phrase must be typed exactly as it
+  appears, including spaces.
+- If nothing arrives, tap **Resend code**. If Telegram sent the code in the app but
+  you cannot access that device, use **Send code by SMS instead**. Repeated
+  requests can trigger a Telegram FloodWait; wait for the stated time.
+- `API_ID_INVALID`, `API_ID_PUBLISHED_FLOOD` or `API_HASH_INVALID` means the server
+  is still using example/wrong MTProto credentials. Replace `TELEGRAM_API_ID` and
+  `TELEGRAM_API_HASH` with the values from <https://my.telegram.org> and redeploy.
+  The `123456` / example hash from `.env.example` cannot receive login codes.
+- `PHONE_NUMBER_INVALID` usually means a missing or wrong country code;
+  `PHONE_NUMBER_UNOCCUPIED` means no Telegram account exists for that number.
+
 ### Tests
 
 The test suite does **not** need Telegram or a real MongoDB server. It uses an
@@ -131,7 +152,7 @@ in-memory Mongo-compatible database and fake transports.
 pytest -q
 ```
 
-Current expected result: **52 passed** (one harmless duplicate-ZIP-name warning).
+Current expected result: **60 passed** (one harmless duplicate-ZIP-name warning).
 
 ---
 
@@ -233,6 +254,7 @@ volume, then drops to the unprivileged `appuser` via `gosu`.
 ### Control bot (private chat)
 
 - `/start` — register and show the dashboard.
+- `/connect` — connect an account using manual international phone entry.
 - `/status` — account state and capacity; may start an on-demand worker if the
   account was evicted.
 - `/jobs` — recent jobs.
@@ -270,6 +292,8 @@ account** that owns the worker. A command typed by someone else is ignored.
   session fingerprint, never the session string.
 - **OTP/2FA handling.** Login codes and 2FA passwords are kept in memory only for
   the login flow, removed from chat where permitted, and never logged.
+- **No contact sharing.** Phone numbers are typed manually; the bot never requests
+  a contact card or address book access.
 - **Log redaction.** A logging filter scrubs bot tokens, API hashes, Fernet keys,
   Mongo credentials, phone numbers, session strings and `password=`-style values.
 - **Ownership checks.** Session loads/deletes take an optional requester and reject
@@ -293,7 +317,7 @@ See [SECURITY.md](SECURITY.md) for the threat model and disclosure guidance.
 
 ## What is not covered by local tests
 
-The 50-test suite uses fakes and an in-memory Mongo database. These paths require
+The 60-test suite uses fakes and an in-memory Mongo database. These paths require
 a real Telegram account/service and are verified only in a live deployment:
 
 - real OTP / 2FA login and session revocation
@@ -341,7 +365,7 @@ app/
 scripts/
   generate_key.py
   init_indexes.py
-tests/            52 offline tests with fake transports and mongomock
+tests/            60 offline tests with fake transports and mongomock
 Dockerfile
 docker-compose.yml
 railway.json

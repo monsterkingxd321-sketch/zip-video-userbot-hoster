@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import socket
 from functools import lru_cache
 from pathlib import Path
@@ -27,6 +28,11 @@ _PLACEHOLDER_SESSION_KEYS = {
     "replace-with-output-of-scripts/generate_key",
     "change-me",
 }
+
+# Values shipped in .env.example. Telegram rejects these API credentials, so
+# detect them early and give a useful explanation instead of a generic phone error.
+_EXAMPLE_API_ID = 123456
+_EXAMPLE_API_HASHES = {"0123456789abcdef0123456789abcdef"}
 
 
 def _split_csv(value: str) -> list[str]:
@@ -158,6 +164,23 @@ class Settings(BaseSettings):
             raise ValueError("TELEGRAM_API_ID must be a positive integer")
         return value
 
+    @field_validator("telegram_api_hash")
+    @classmethod
+    def _validate_api_hash(cls, value: str) -> str:
+        value = (value or "").strip()
+        if not re.fullmatch(r"[0-9a-fA-F]{32}", value):
+            raise ValueError(
+                "TELEGRAM_API_HASH must be exactly 32 hexadecimal characters from my.telegram.org"
+            )
+        return value
+
+    @property
+    def telegram_api_looks_like_example(self) -> bool:
+        return (
+            self.telegram_api_id == _EXAMPLE_API_ID
+            and self.telegram_api_hash.lower() in _EXAMPLE_API_HASHES
+        )
+
     @model_validator(mode="after")
     def _validate_limits(self) -> "Settings":
         positive = {
@@ -195,6 +218,15 @@ class Settings(BaseSettings):
         for name, value in (("HEALTH_PORT", self.health_port), ("PORT", self.port)):
             if value is not None and not (0 <= int(value) <= 65535):
                 raise ValueError(f"{name} must be between 0 and 65535")
+        if (
+            self.telegram_api_id == _EXAMPLE_API_ID
+            or self.telegram_api_hash.lower() in _EXAMPLE_API_HASHES
+        ):
+            logger.warning(
+                "TELEGRAM_API_ID/TELEGRAM_API_HASH look like the .env.example values; "
+                "Telegram will reject /connect requests. Use real credentials from "
+                "my.telegram.org."
+            )
         return self
 
     # ------------------------------------------------------------------

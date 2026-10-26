@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 
 from app.sessions.login import LoginManager
-from app.sessions.states import LoginOutcome, LoginState
+from app.sessions.states import (
+    InvalidCodeError,
+    LoginOutcome,
+    LoginState,
+    normalize_login_code,
+)
 from app.userbot.transport import (
     AccountInfo,
     CodeRequestResult,
@@ -24,6 +29,15 @@ class LoginTransport(FakeTransport):
         )
         self.password_required = password_required
         self.code_attempts = []
+        self.code_requests = []
+
+    async def send_code_request(self, phone, *, force_sms=False):
+        self.code_requests.append((phone, force_sms))
+        return CodeRequestResult(
+            phone_code_hash=f"hash-{len(self.code_requests)}",
+            delivery="sms" if force_sms else "app",
+            next_delivery="sms",
+        )
 
     async def sign_in_with_code(self, phone, code, phone_code_hash):
         self.code_attempts.append(code)
@@ -39,11 +53,18 @@ class LoginTransport(FakeTransport):
         return self.account
 
 
-def make_manager(transports, *, expected=None, require_same_account=True, clock=None):
+def make_manager(
+    transports,
+    *,
+    expected=None,
+    require_same_account=True,
+    clock=None,
+    transport_cls=LoginTransport,
+):
     created = []
 
     def factory(user_id: int, session: str):
-        transport = LoginTransport()
+        transport = transport_cls()
         transports.append(transport)
         created.append(transport)
         return transport
@@ -158,3 +179,79 @@ async def test_abandon_disconnects_and_clears_completed():
     await manager.abandon(8)
     assert manager.has_pending(8) is False
     assert transports[0].connected is False
+
+
+@pytest.mark.asyncio
+async def test_resend_code_reports_delivery_and_can_force_sms():
+    transports = []
+    manager = make_manager(transports)
+    first = await manager.begin(20, "+15550002020")
+    assert first.outcome is LoginOutcome.CODE_SENT
+    assert first.delivery == "app"
+
+    resent = await manager.resend_code(20)
+    assert resent.outcome is LoginOutcome.CODE_SENT
+    assert resent.delivery == "app"
+    assert transports[0].code_requests == [("+15550002020", False), ("+15550002020", False)]
+
+    sms = await manager.resend_code(20, force_sms=True)
+    assert sms.outcome is LoginOutcome.CODE_SENT
+    assert sms.delivery == "sms"
+    assert transports[0].code_requests[-1] == ("+15550002020", True)
+
+    # The updated phone_code_hash must be the one used by the next sign-in.
+    authorized = await manager.submit_code(20, "12345")
+    assert authorized.outcome is LoginOutcome.AUTHORIZED
+
+
+@pytest.mark.asyncio
+async def test_resend_without_pending_login_is_reported():
+    manager = make_manager([])
+    result = await manager.resend_code(21)
+    assert result.outcome is LoginOutcome.NO_PENDING_LOGIN
+
+
+@pytest.mark.asyncio
+async def test_api_id_error_is_not_reported_as_invalid_phone():
+    class ApiFailTransport(FakeTransport):
+        async def send_code_request(self, phone, *, force_sms=False):
+            raise PermanentTransportError("API_ID_INVALID", "request failed")
+
+    manager = LoginManager(transport_factory=lambda user_id, session: ApiFailTransport())
+    result = await manager.begin(22, "+15550002222")
+    assert result.outcome is LoginOutcome.ERROR
+    assert "API_ID_INVALID" in result.message
+    assert "phone number" not in result.message.lower()
+
+
+def test_word_and_phrase_codes_are_normalized_only_when_allowed():
+    assert normalize_login_code(" 1 2 3 4 5 ") == "12345"
+    with pytest.raises(InvalidCodeError):
+        normalize_login_code("secret word")
+    assert normalize_login_code("  secret   word  ", allow_words=True) == "secret word"
+    assert normalize_login_code("  hello   world ", allow_words=True) == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_phrase_code_delivery_accepts_word_code():
+    class PhraseTransport(LoginTransport):
+        async def send_code_request(self, phone, *, force_sms=False):
+            self.code_requests.append((phone, force_sms))
+            return CodeRequestResult(
+                phone_code_hash="phrase-hash",
+                delivery="sms_phrase",
+                next_delivery="sms",
+            )
+
+        async def sign_in_with_code(self, phone, code, phone_code_hash):
+            self.code_attempts.append(code)
+            return self.account
+
+    transports = []
+    manager = make_manager(transports, transport_cls=PhraseTransport)
+    first = await manager.begin(23, "+15550002323")
+    assert first.delivery == "sms_phrase"
+
+    authorized = await manager.submit_code(23, "  hello   world ")
+    assert authorized.outcome is LoginOutcome.AUTHORIZED
+    assert transports[0].code_attempts == ["hello world"]

@@ -5,6 +5,8 @@ Security guarantees implemented here
 * Everything happens in a **private chat**. Group chats are rejected outright, so
   a login code or a two-step password can never be requested or accepted in a
   public place.
+* Phone numbers are entered manually. The flow never requests the user's contact
+  card or address book.
 * The OTP and the two-step password are handed to
   :class:`~app.sessions.manager.SessionManager`, used inside the coroutine that
   received them and then dropped. They are never written to the FSM, to MongoDB,
@@ -24,7 +26,7 @@ import logging
 
 from aiogram import F, Router
 from aiogram.enums import ChatType
-from aiogram.filters import StateFilter
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 
@@ -33,7 +35,7 @@ from app.bot import texts
 from app.bot.services import BotServices
 from app.bot.states import ConnectFlow
 from app.constants import AccountStatus
-from app.sessions.states import LoginOutcome
+from app.sessions.states import LoginOutcome, LoginState
 
 logger = logging.getLogger(__name__)
 
@@ -71,14 +73,22 @@ async def _drop(message: Message) -> None:
         logger.debug("could not delete message: %s", type(exc).__name__)
 
 
+async def _reset_login(user_id: int, services: BotServices) -> None:
+    """Cancel any in-memory login and clear a stale awaiting-code status."""
+    await services.sessions.abandon_login(user_id)
+    user = await services.repos.users.get(user_id)
+    if user is not None and user.status in (
+        AccountStatus.AWAITING_CODE.value,
+        AccountStatus.AWAITING_PASSWORD.value,
+    ):
+        await services.repos.users.set_status(user_id, AccountStatus.NEW.value)
+
+
 async def _ask_for_phone(message: Message, state: FSMContext) -> None:
     await state.set_state(ConnectFlow.phone)
-    await message.answer(texts.connect_phone_prompt(), reply_markup=kb.phone_request_keyboard())
-    await message.answer(
-        "⏱ Waiting for your phone number — tap the button or type it. "
-        "Use /start to cancel.",
-        reply_markup=kb.cancel_keyboard(),
-    )
+    # Remove any old contact-share keyboard cached by clients from an earlier
+    # deployment. The flow below accepts typed numbers only.
+    await message.answer(texts.connect_phone_prompt(), reply_markup=ReplyKeyboardRemove())
 
 
 async def _ask_for_code(message: Message, state: FSMContext, *, note: str = "") -> None:
@@ -86,7 +96,16 @@ async def _ask_for_code(message: Message, state: FSMContext, *, note: str = "") 
     body = texts.connect_code_prompt()
     if note:
         body = f"{note}\n\n{body}"
-    await message.answer(body, reply_markup=kb.cancel_keyboard())
+    await message.answer(body, reply_markup=kb.code_keyboard())
+
+
+async def _edit_code_prompt(callback: CallbackQuery, body: str) -> None:
+    if callback.message is None:
+        return
+    try:
+        await callback.message.edit_text(body, reply_markup=kb.code_keyboard())
+    except Exception as exc:  # pragma: no cover - Telegram may reject identical edits
+        logger.debug("could not edit code prompt: %s", type(exc).__name__)
 
 
 async def _ask_for_password(message: Message, state: FSMContext, *, note: str = "") -> None:
@@ -182,12 +201,7 @@ async def cb_connect(callback: CallbackQuery, state: FSMContext, services: BotSe
         await callback.answer()
         return
 
-    await callback.message.edit_text(
-        "📱 <b>Connect your Telegram account</b>\n\n"
-        "Tap the button below to send your phone number, or type it in international "
-        "format (for example <code>+919876543210</code>).",
-        reply_markup=kb.cancel_keyboard(),
-    )
+    await _reset_login(user_id, services)
     await _ask_for_phone(callback.message, state)
     await callback.answer()
 
@@ -201,12 +215,8 @@ async def cb_consent(callback: CallbackQuery, state: FSMContext, services: BotSe
     await services.register_user(callback.from_user)
     await services.repos.users.set_consent(user_id, True)
     await services.repos.audit.record(user_id, "session.consent_given", target_user_id=user_id)
-    await callback.message.edit_text(
-        "✅ Consent recorded.\n\n"
-        "Now send your phone number in international format. Telegram will send the "
-        "login code to your Telegram app.",
-        reply_markup=kb.cancel_keyboard(),
-    )
+    await callback.message.edit_text("✅ Consent recorded.")
+    await _reset_login(user_id, services)
     await _ask_for_phone(callback.message, state)
     await callback.answer()
 
@@ -230,23 +240,93 @@ async def cb_cancel_login(callback: CallbackQuery, state: FSMContext, services: 
     await callback.answer("Cancelled.")
 
 
+@router.message(Command("connect"))
+async def cmd_connect(message: Message, state: FSMContext, services: BotServices) -> None:
+    if not _is_private(message):
+        await message.answer("🔒 Account login only works in a private chat.")
+        return
+
+    user = await services.register_user(message.from_user)
+    if user.is_banned:
+        await message.answer("🚫 This account is suspended. Contact the operator.")
+        return
+    if not user.consent_given:
+        await state.clear()
+        await message.answer(texts.SECURITY_NOTICE, reply_markup=kb.consent_menu())
+        return
+
+    await _reset_login(int(message.from_user.id), services)
+    await _ask_for_phone(message, state)
+
+
+@router.callback_query(F.data.in_({"act:resend_code", "act:resend_sms"}))
+async def cb_resend_code(
+    callback: CallbackQuery, state: FSMContext, services: BotServices
+) -> None:
+    if callback.message is None or callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Resend the code in a private chat with the bot.", show_alert=True)
+        return
+
+    user_id = int(callback.from_user.id)
+    force_sms = callback.data == "act:resend_sms"
+    result = await services.sessions.resend_code(user_id, force_sms=force_sms)
+
+    if result.outcome is LoginOutcome.CODE_SENT:
+        await state.set_state(ConnectFlow.code)
+        note = texts.code_delivery_text(result.delivery)
+        body = f"{note}\n\n{texts.connect_code_prompt()}"
+        await _edit_code_prompt(callback, body)
+        await callback.answer("New code requested.")
+        return
+
+    if result.outcome is LoginOutcome.FLOOD_WAIT:
+        wait = max(1, int(result.retry_after) or 60)
+        await callback.answer(
+            f"⏳ Telegram says wait about {wait}s before requesting another code.",
+            show_alert=True,
+        )
+        return
+
+    if result.outcome is LoginOutcome.TRANSIENT_ERROR:
+        await callback.answer(
+            _esc(result.message) or "Temporary network problem. Try again.",
+            show_alert=True,
+        )
+        return
+
+    if result.outcome is LoginOutcome.ERROR and result.state is LoginState.AWAITING_CODE:
+        # The login is still usable (for example, Telegram refused SMS only).
+        note = f"⚠️ {_esc(result.message) or 'The code could not be resent.'}"
+        await _edit_code_prompt(callback, f"{note}\n\n{texts.connect_code_prompt()}")
+        await callback.answer("Code not resent.", show_alert=True)
+        return
+
+    if result.outcome is LoginOutcome.ERROR and result.state is LoginState.AWAITING_PASSWORD:
+        await callback.answer(
+            "Enter your two-step password to continue; resend is no longer available.",
+            show_alert=True,
+        )
+        return
+
+    await state.clear()
+    user = await services.repos.users.get(user_id)
+    body = (
+        f"⚠️ {_esc(result.message) or 'The login could not be resumed.'}\n\n"
+        "Send /start or /connect to try again."
+    )
+    if callback.message is not None:
+        try:
+            await callback.message.edit_text(
+                body, reply_markup=kb.main_menu(user, is_admin=services.is_admin(user_id))
+            )
+        except Exception as exc:  # pragma: no cover - Telegram may reject the edit
+            logger.debug("could not show resend failure: %s", type(exc).__name__)
+    await callback.answer("Login ended.", show_alert=True)
+
+
 # ---------------------------------------------------------------------------
 # step 1: phone number
 # ---------------------------------------------------------------------------
-@router.message(StateFilter(ConnectFlow.phone), F.contact)
-async def on_contact(message: Message, state: FSMContext, services: BotServices) -> None:
-    if not _is_private(message):
-        await _abort_flow(message, state, "🔒 Account login only works in a private chat.")
-        return
-    contact = message.contact
-    # Only accept the user's own contact card. A contact without a Telegram
-    # user id cannot be tied to the sender, so it is rejected too.
-    if contact is None or contact.user_id is None or int(contact.user_id) != int(message.from_user.id):
-        await message.answer("Please share <b>your own</b> Telegram contact.")
-        return
-    await _submit_phone(message, state, services, contact.phone_number)
-
-
 @router.message(StateFilter(ConnectFlow.phone), F.text)
 async def on_phone(message: Message, state: FSMContext, services: BotServices) -> None:
     if not _is_private(message):
@@ -286,7 +366,11 @@ async def _submit_phone(
         # Never echo the phone number back: only a masked reminder.
         masked = phone[-4:] if len(phone) > 5 else "…"
         await status.edit_text(f"✉️ Login code requested for •••{masked}.")
-        await _ask_for_code(message, state)
+        await _ask_for_code(
+            message,
+            state,
+            note=texts.code_delivery_text(result.delivery),
+        )
         return
 
     if result.outcome is LoginOutcome.FLOOD_WAIT:

@@ -46,6 +46,8 @@ WELCOME = (
     "3. Every video inside the archive is uploaded as a native Telegram video.\n"
     "   Add <code>spoiler</code> to send them with the spoiler effect.\n\n"
     "<b>Commands</b>\n"
+    "<code>/connect</code> – connect a Telegram account\n"
+    "<code>/status</code> – account and worker status\n"
     "<code>/unzip</code> – extract and send videos\n"
     "<code>/unzip spoiler</code> – send videos with the spoiler effect\n"
     "<code>/cancel</code> – cancel the latest job\n"
@@ -59,7 +61,8 @@ SECURITY_NOTICE = (
     "• Your <b>login code</b> and <b>two‑step password</b> are used once, in memory only. "
     "They are never written to a database, never written to disk and never logged.\n"
     "• Your session key is encrypted before it is stored, on a private volume and as an "
-    "encrypted backup. Encryption keys come from the server environment, never from code.\n"
+    "encrypted backup. Encryption keys come from the server secret store or a protected "
+    "key file on the private volume, never from code.\n"
     "• You can revoke everything at any time: <b>Disconnect Account</b> stops the service, "
     "<b>Delete Session</b> destroys the stored key. You can also terminate the session "
     "yourself in Telegram → Settings → Devices.\n"
@@ -233,18 +236,67 @@ def admin_user_text(user: UserRecord, extra: Optional[Dict[str, Any]] = None) ->
 
 def connect_phone_prompt() -> str:
     return (
-        "📱 Send your phone number in <b>international format</b>, for example "
+        "📱 Type your phone number <b>manually</b> in international format, for example "
         "<code>+919876543210</code>.\n\n"
-        "Telegram will send the login code to your Telegram app (not by SMS), and you "
-        "will paste it here.\n\n"
+        "Include the country code. Contact sharing is disabled — do not send a contact "
+        "card. I never ask for your contacts.\n\n"
         "Send /start to cancel."
     )
 
 
+def code_delivery_text(delivery: Optional[str]) -> str:
+    """Explain where Telegram sent the code, using a safe transport label."""
+    if delivery == "app":
+        return (
+            "📨 Telegram sent the code to your <b>Telegram app</b>, not SMS. Open the chat "
+            "named <b>Telegram</b> on a device where this account is already logged in."
+        )
+    if delivery == "sms":
+        return "📲 Telegram sent the code by <b>SMS</b> to your phone."
+    if delivery == "call":
+        return "📞 Telegram will <b>call</b> your phone and read the code. Answer the call."
+    if delivery == "flash_call":
+        return (
+            "📞 Telegram will <b>flash-call</b> your phone. The last digits of the incoming "
+            "number are the login code."
+        )
+    if delivery == "missed_call":
+        return "📞 Telegram will make a <b>missed call</b>; the code is the last digits of that number."
+    if delivery == "email":
+        return "📧 Telegram sent the code to the <b>email address</b> registered on the account."
+    if delivery == "email_setup":
+        return (
+            "📧 Telegram requires a login email to be set up first. Open Telegram on a "
+            "logged-in device and add a login email, then request the code again."
+        )
+    if delivery == "fragment_sms":
+        return "📲 Telegram sent the code by <b>Fragment SMS</b>."
+    if delivery == "firebase_sms":
+        return (
+            "📲 Telegram selected <b>Firebase SMS</b>, which only official mobile apps can "
+            "receive. Tap <b>Send code by SMS instead</b> to request a normal SMS."
+        )
+    if delivery == "sms_word":
+        return (
+            "📲 Telegram sent a <b>secret word</b> by SMS. Type the whole word exactly as "
+            "it appears in the message."
+        )
+    if delivery == "sms_phrase":
+        return (
+            "📲 Telegram sent a <b>secret phrase</b> by SMS. Type every word exactly as it "
+            "appears, separated by spaces."
+        )
+    return "📨 Telegram accepted the request; check your Telegram app, SMS and email."
+
+
 def connect_code_prompt() -> str:
     return (
-        "✉️ Enter the <b>login code</b> Telegram just sent you.\n\n"
-        "Spaces are fine — <code>1 2 3 4 5</code> works exactly like <code>12345</code>.\n"
+        "✉️ Enter the <b>login code</b> Telegram sent you.\n\n"
+        "Digits can be typed with spaces — <code>1 2 3 4 5</code> works like "
+        "<code>12345</code>. If Telegram sent a secret <b>word or phrase</b>, type it "
+        "exactly as it appears, including spaces.\n"
+        "No code arrived? Use <b>Resend code</b>, or <b>Send code by SMS instead</b> if "
+        "Telegram sent it inside the app but you cannot access that device.\n\n"
         "I will try to delete your message so the code does not stay in this chat."
     )
 
@@ -290,6 +342,7 @@ __all__ = [
     "admin_text",
     "admin_user_text",
     "connect_phone_prompt",
+    "code_delivery_text",
     "connect_code_prompt",
     "connect_password_prompt",
     "connected_text",

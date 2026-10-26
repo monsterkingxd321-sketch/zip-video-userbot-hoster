@@ -4,12 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from aiogram.types import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardMarkup,
-)
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.constants import AccountStatus
 from app.db.models import TaskRecord, UserRecord
@@ -53,18 +48,24 @@ def consent_menu() -> InlineKeyboardMarkup:
     )
 
 
-def phone_request_keyboard() -> ReplyKeyboardMarkup:
-    """A one-tap phone share (Telegram only offers it for the bot's own contact)."""
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📱 Share my phone number", request_contact=True)]],
-        resize_keyboard=True,
-        one_time_keyboard=True,
-    )
-
-
 def cancel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="✖️ Cancel", callback_data="act:cancel_login")]]
+    )
+
+
+def code_keyboard() -> InlineKeyboardMarkup:
+    """Login-code actions: resend normally, force SMS, or cancel."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Resend code", callback_data="act:resend_code")],
+            [
+                InlineKeyboardButton(
+                    text="📩 Send code by SMS instead", callback_data="act:resend_sms"
+                )
+            ],
+            [InlineKeyboardButton(text="✖️ Cancel", callback_data="act:cancel_login")],
+        ]
     )
 
 
@@ -164,8 +165,8 @@ def admin_user_menu(user_id: int, *, banned: bool, connected: bool) -> InlineKey
 __all__ = [
     "main_menu",
     "consent_menu",
-    "phone_request_keyboard",
     "cancel_keyboard",
+    "code_keyboard",
     "settings_menu",
     "tasks_menu",
     "task_menu",

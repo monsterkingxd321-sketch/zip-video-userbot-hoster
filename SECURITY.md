@@ -35,6 +35,9 @@ assets are:
   0600). The key is never logged.
 - **No session material in UI or admin views:** the database stores a fingerprint
   and masked phone number, not the session string. Admin output is HTML-escaped.
+- **Manual phone entry:** the login flow never uses Telegram's `request_contact`
+  button and never reads the user's address book. The phone number is typed by the
+  user, used for the login request, and stored only in masked form.
 - **Log redaction:** every log record passes through a redaction filter covering
   bot tokens, API hashes, Fernet keys, Mongo credentials, phone numbers and
   session-like blobs. Application logs do not include OTPs or passwords.

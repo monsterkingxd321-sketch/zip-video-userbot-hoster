@@ -21,7 +21,7 @@ from app.constants import AccountStatus
 from app.core.metrics import Metrics, metrics as default_metrics
 from app.db.repositories import Repositories
 from app.sessions.login import CompletedLogin, LoginManager
-from app.sessions.states import LoginResult
+from app.sessions.states import LoginOutcome, LoginResult, LoginState
 from app.sessions.store import SessionStore, masked_phone_of
 from app.userbot.transport import (
     AccountInfo,
@@ -73,6 +73,22 @@ class SessionManager:
     # login
     # ------------------------------------------------------------------
     async def start_login(self, user_id: int, phone: str) -> LoginResult:
+        if getattr(self._settings, "telegram_api_looks_like_example", False):
+            logger.warning(
+                "login blocked for user %s: TELEGRAM_API_ID/HASH still look like examples",
+                user_id,
+            )
+            return LoginResult(
+                LoginOutcome.ERROR,
+                LoginState.IDLE,
+                message=(
+                    "Operator setup error: TELEGRAM_API_ID and TELEGRAM_API_HASH are "
+                    "still the example values. Use the real API ID and hash from "
+                    "my.telegram.org, then redeploy. Login codes cannot arrive until "
+                    "this is fixed."
+                ),
+            )
+
         user = await self._repos.users.get(int(user_id))
         expected = None
         if user is not None:
@@ -88,6 +104,11 @@ class SessionManager:
             await self._repos.audit.record(
                 user_id, "login.code_requested", target_user_id=user_id
             )
+        return result
+
+    async def resend_code(self, user_id: int, *, force_sms: bool = False) -> LoginResult:
+        result = await self.login.resend_code(int(user_id), force_sms=force_sms)
+        await self._sync_status_from_login(user_id, result)
         return result
 
     async def submit_code(self, user_id: int, code: str) -> LoginResult:
@@ -225,8 +246,6 @@ class SessionManager:
     # internals
     # ------------------------------------------------------------------
     async def _sync_status_from_login(self, user_id: int, result: LoginResult) -> None:
-        from app.sessions.states import LoginOutcome, LoginState
-
         if result.outcome is LoginOutcome.NO_PENDING_LOGIN:
             user = await self._repos.users.get(user_id)
             if user is not None and user.status in (
