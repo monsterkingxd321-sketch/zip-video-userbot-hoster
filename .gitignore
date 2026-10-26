@@ -22,11 +22,12 @@ dist/
 .coverage
 htmlcov/
 
-# Runtime data and logs
-data/
-sessions/
-tmp/
-temp/
+# Runtime data and logs (anchored so source packages such as app/sessions are
+# never ignored)
+/data/
+/sessions/
+/tmp/
+/temp/
 *.log
 compile.log
 faulthandler.log
