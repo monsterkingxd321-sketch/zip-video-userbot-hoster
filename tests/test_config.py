@@ -5,6 +5,7 @@ from cryptography.fernet import Fernet
 from pydantic import ValidationError
 
 from app.config import Settings
+from app.core.crypto import SessionCipher
 
 REQUIRED = {
     "BOT_TOKEN": "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
@@ -62,6 +63,34 @@ def test_invalid_encryption_key_is_rejected(monkeypatch, tmp_path):
     )
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+def test_missing_encryption_key_creates_and_reuses_file(monkeypatch, tmp_path):
+    _apply_env(monkeypatch, DATA_DIR=str(tmp_path), SESSION_ENCRYPTION_KEY=None)
+    settings = Settings(_env_file=None)
+    key = settings.resolve_session_key()
+
+    SessionCipher(key)
+    key_path = tmp_path / "session.key"
+    assert key_path.read_text("utf-8").strip() == key
+    assert settings.resolve_session_key() == key
+
+    # A fresh Settings object (as after a restart) must reuse the same key.
+    restarted = Settings(_env_file=None)
+    assert restarted.resolve_session_key() == key
+
+
+def test_example_placeholder_key_falls_back_to_file(monkeypatch, tmp_path):
+    _apply_env(
+        monkeypatch,
+        DATA_DIR=str(tmp_path),
+        SESSION_ENCRYPTION_KEY="replace-with-output-of-scripts/generate_key.py",
+    )
+    settings = Settings(_env_file=None)
+    assert settings.session_encryption_key == ""
+    key = settings.resolve_session_key()
+    SessionCipher(key)
+    assert (tmp_path / "session.key").read_text("utf-8").strip() == key
 
 
 def test_limits_and_extension_normalization(monkeypatch, tmp_path):

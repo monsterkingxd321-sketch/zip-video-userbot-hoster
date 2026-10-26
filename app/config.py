@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import socket
 from functools import lru_cache
@@ -14,8 +15,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.constants import DEFAULT_STREAMABLE_EXTENSIONS, DEFAULT_VIDEO_EXTENSIONS
 from app.core.crypto import SessionCipher
 
+logger = logging.getLogger(__name__)
+
 MIB = 1024 * 1024
 GIB = 1024 * 1024 * 1024
+
+# Older example files shipped this literal value. Treat it as "not configured"
+# so a copied template cannot stop the service from starting.
+_PLACEHOLDER_SESSION_KEYS = {
+    "replace-with-output-of-scripts/generate_key.py",
+    "replace-with-output-of-scripts/generate_key",
+    "change-me",
+}
 
 
 def _split_csv(value: str) -> list[str]:
@@ -33,8 +44,9 @@ class Settings(BaseSettings):
     """Environment driven settings.
 
     Required variables: ``BOT_TOKEN``, ``TELEGRAM_API_ID``, ``TELEGRAM_API_HASH``,
-    ``MONGODB_URI``, ``SESSION_ENCRYPTION_KEY``. ``ADMIN_IDS`` is optional but
-    strongly recommended.
+    ``MONGODB_URI``. ``SESSION_ENCRYPTION_KEY`` is optional: when it is not set,
+    a random key is generated once at ``<DATA_DIR>/session.key``. ``ADMIN_IDS``
+    is optional but strongly recommended.
     """
 
     model_config = SettingsConfigDict(
@@ -53,7 +65,8 @@ class Settings(BaseSettings):
     # --- Persistence -----------------------------------------------------
     mongodb_uri: str
     mongodb_db: str = "userbot_hosting"
-    session_encryption_key: str
+    # Empty means: use/create the persistent key file at session_key_path.
+    session_encryption_key: str = ""
 
     # --- Paths (Railway persistent volume mounted at DATA_DIR) -----------
     data_dir: str = "/data"
@@ -125,7 +138,16 @@ class Settings(BaseSettings):
     @field_validator("session_encryption_key")
     @classmethod
     def _validate_key(cls, value: str) -> str:
-        # Fails fast with a helpful message when the key is missing/invalid.
+        value = (value or "").strip()
+        if not value:
+            return ""
+        if value.lower() in _PLACEHOLDER_SESSION_KEYS:
+            logger.warning(
+                "SESSION_ENCRYPTION_KEY contains the example placeholder; "
+                "ignoring it and using the persistent key file instead"
+            )
+            return ""
+        # Fail fast for a malformed explicitly configured key.
         SessionCipher(value)
         return value
 
@@ -215,6 +237,80 @@ class Settings(BaseSettings):
         if self.temp_dir:
             return Path(self.temp_dir)
         return Path(self.data_dir) / "tmp"
+
+    @property
+    def session_key_path(self) -> Path:
+        """Key file used when SESSION_ENCRYPTION_KEY is not configured."""
+        return Path(self.data_dir) / "session.key"
+
+    def resolve_session_key(self) -> str:
+        """Return the configured key, or load/create the persistent key file.
+
+        An explicit ``SESSION_ENCRYPTION_KEY`` always wins. When it is absent,
+        the key is kept on the persistent data volume so sessions survive
+        restarts. The key is never logged.
+        """
+        if self.session_encryption_key:
+            return self.session_encryption_key
+
+        path = self.session_key_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_symlink():
+            raise ValueError(f"session key path must not be a symlink: {path}")
+
+        try:
+            existing = path.read_text("utf-8").strip()
+        except FileNotFoundError:
+            existing = ""
+        except OSError as exc:
+            raise ValueError(f"could not read session key file: {path}") from exc
+
+        if existing:
+            self._validate_session_key_file(path, existing)
+            self._harden_session_key_file(path)
+            logger.info("using persistent session key from %s", path)
+            return existing
+
+        key = SessionCipher.generate_key()
+        try:
+            fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            # A concurrent start won the race. Reuse its key, or replace an
+            # empty file left by a crash before the first write completed.
+            existing = path.read_text("utf-8").strip()
+            if existing:
+                self._validate_session_key_file(path, existing)
+                self._harden_session_key_file(path)
+                return existing
+            path.write_text(key + "\n", encoding="utf-8")
+        else:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(key + "\n")
+
+        self._harden_session_key_file(path)
+        logger.warning(
+            "SESSION_ENCRYPTION_KEY is not set; generated a persistent key at %s. "
+            "Keep DATA_DIR on a persistent volume, or set SESSION_ENCRYPTION_KEY "
+            "to keep the key outside that volume.",
+            path,
+        )
+        return key
+
+    @staticmethod
+    def _validate_session_key_file(path: Path, key: str) -> None:
+        try:
+            SessionCipher(key)
+        except ValueError as exc:
+            raise ValueError(
+                f"session key file is not a valid Fernet key: {path}"
+            ) from exc
+
+    @staticmethod
+    def _harden_session_key_file(path: Path) -> None:
+        try:
+            os.chmod(path, 0o600)
+        except OSError:  # pragma: no cover - platform dependent (Windows)
+            pass
 
     @property
     def effective_worker_id(self) -> str:

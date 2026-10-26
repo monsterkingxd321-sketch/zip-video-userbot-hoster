@@ -88,7 +88,7 @@ class Application:
         if cleared:
             logger.warning("cleared %d stale storage reservation(s)", cleared)
 
-        cipher = SessionCipher(settings.session_encryption_key)
+        cipher = SessionCipher(settings.resolve_session_key())
         self.store = SessionStore(settings.sessions_path, cipher, self.repos)
         await self._prune_orphan_sessions()
 

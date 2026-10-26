@@ -42,8 +42,9 @@ class SessionStore:
         <sessions_dir>/<user_id>/meta.json     # non-sensitive metadata
 
     The ciphertext is *also* written to MongoDB as a backup. Neither copy is
-    usable without ``SESSION_ENCRYPTION_KEY``; see the README for the security
-    model, backup and revocation guidance.
+    usable without the Fernet key (``SESSION_ENCRYPTION_KEY`` or the auto-created
+    ``<DATA_DIR>/session.key``); see the README for the security model, backup
+    and revocation guidance.
     """
 
     def __init__(self, root: Path, cipher: SessionCipher, repos: Repositories) -> None:

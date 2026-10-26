@@ -30,7 +30,9 @@ assets are:
 
 - **Encryption at rest:** session strings are Fernet-encrypted before being
   written to the persistent volume and MongoDB. The plaintext exists only in
-  process memory.
+  process memory. The key is taken from `SESSION_ENCRYPTION_KEY` when configured;
+  otherwise a random key is generated once at `<DATA_DIR>/session.key` (mode
+  0600). The key is never logged.
 - **No session material in UI or admin views:** the database stores a fingerprint
   and masked phone number, not the session string. Admin output is HTML-escaped.
 - **Log redaction:** every log record passes through a redaction filter covering
@@ -55,14 +57,17 @@ assets are:
 
 ### Trust boundaries and residual risks
 
-- **Environment secrets are the root of trust.** Anyone with access to the
-  Railway/Docker/Mongo environment can read the encryption key and database and
-  therefore impersonate connected accounts. Use least-privilege deployment
-  accounts, restrict dashboard access, and keep the volume private.
+- **Environment secrets and the data volume are the root of trust.** Anyone with
+  access to the Railway/Docker/Mongo environment or the `/data` volume can read
+  the encryption key and database and therefore impersonate connected accounts.
+  Use least-privilege deployment accounts, restrict dashboard access, and keep
+  the volume private. Setting `SESSION_ENCRYPTION_KEY` keeps the key outside the
+  volume; the automatic `/data/session.key` mode stores it beside the local
+  session files (the Mongo backup still needs the key).
 - **A compromised encryption key** compromises all stored sessions. Rotation is
   not automatic; removing the key or rotating it makes existing sessions
   unreadable, so users must reconnect. Do not rotate by simply changing the env
-  var unless you intend that outcome.
+  var or deleting `session.key` unless you intend that outcome.
 - **Telegram itself** can revoke sessions, impose FloodWait or ban accounts.
   Handling these events is best-effort.
 - **Malicious archives** are constrained by size/depth/ratio/path checks, but
@@ -81,8 +86,10 @@ assets are:
 
 - Never commit `.env`, real values in `.env.example`, session files, logs,
   screenshots or database dumps.
-- `SESSION_ENCRYPTION_KEY` must be generated once with
-  `python scripts/generate_key.py` and stored only in the platform's secret store.
+- `SESSION_ENCRYPTION_KEY` is optional. If used, generate it once with
+  `python scripts/generate_key.py` and store it only in the platform's secret
+  store. If omitted, protect the auto-created `<DATA_DIR>/session.key` and the
+  persistent volume; never copy the key into the repository or logs.
 - Generate a new GitHub token for publishing and **revoke/rotate it immediately
   after use**. Never place it in a remote URL, `.git/config`, a script or a commit.
 - If a bot token, API hash, session key or Mongo URI is exposed, rotate it now:
@@ -99,7 +106,8 @@ assets are:
 - [ ] Restrict `ADMIN_IDS` to your own account(s).
 - [ ] Mount `/data` on a private persistent volume.
 - [ ] Use a MongoDB instance with authentication and network isolation.
-- [ ] Set a strong, unique `SESSION_ENCRYPTION_KEY`.
+- [ ] Set a strong, unique `SESSION_ENCRYPTION_KEY`, or protect the auto-created
+      `<DATA_DIR>/session.key` on a private persistent volume.
 - [ ] Keep TLS between the app and MongoDB where supported.
 - [ ] Run one app replica unless you have added distributed update handling.
 - [ ] Monitor `/healthz`, `/readyz` and logs for repeated auth/FloodWait errors.
