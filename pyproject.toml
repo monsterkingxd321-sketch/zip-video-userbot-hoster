@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zip-video-userbot-hoster"
+version = "1.0.0"
+description = "Multi-user Telegram userbot service that extracts videos from ZIP archives and re-sends them as native Telegram videos."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "zip-video-userbot-hoster contributors" }]
+dependencies = [
+    "aiogram==3.31.0",
+    "aiofiles==24.1.0",
+    "aiohttp==3.14.5",
+    "cryptography==45.0.7",
+    "dnspython==2.9.0",
+    "motor==3.7.1",
+    "psutil==7.2.2",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.16.1",
+    "pymongo==4.19.0",
+    "python-dotenv==1.2.4",
+    "Telethon==1.45.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mongomock==4.3.0",
+    "mongomock-motor==0.0.36",
+    "pytest==8.4.2",
+    "pytest-asyncio==0.26.0",
+]
+
+[project.scripts]
+zip-userbot-hoster = "app.main:run"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra"
