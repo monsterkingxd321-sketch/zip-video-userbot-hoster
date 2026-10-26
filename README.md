@@ -151,6 +151,12 @@ complete annotated list. The required ones are:
 | `ADMIN_IDS` | Comma-separated Telegram user IDs allowed to use `/admin` |
 | `DATA_DIR` | Persistent directory (default `/data`) |
 
+`.env.example` is only a template. Do not copy its example values into Railway
+or production. In particular, `SESSION_ENCRYPTION_KEY` has no usable default:
+generate one with `python scripts/generate_key.py` and set the full 44-character
+output. The app intentionally refuses to start with the placeholder or an
+invalid key.
+
 Important operational settings:
 
 - `PORT` — injected by Railway; takes precedence over `HEALTH_PORT`.
@@ -180,7 +186,9 @@ Important operational settings:
 4. Add a **Volume** to the app service and mount it at **`/data`**.
 5. Set the required variables from the table above. Generate
    `SESSION_ENCRYPTION_KEY` locally with `python scripts/generate_key.py` and paste
-   only the value into Railway. Do not commit it.
+   only the 44-character value into Railway. Never paste the example placeholder
+   from `.env.example`, and do not commit the real key. Changing this key later
+   makes existing encrypted sessions unreadable.
 6. Leave `PORT` to Railway. Do **not** set `HEALTH_PORT` to a conflicting port.
 7. Deploy. Railway checks **`/healthz`**. `/readyz` additionally verifies MongoDB.
 8. Open the control bot, send `/start`, then `/connect` and complete the login.
