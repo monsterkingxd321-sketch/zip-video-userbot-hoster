@@ -5,10 +5,12 @@ venv
 __pycache__
 *.pyc
 tests
-/data
-/sessions
-/tmp
-/temp
+data/**
+sessions/**
+tmp/**
+temp/**
+# Keep the source package even if a broad runtime ignore is added later.
+!app/sessions/**
 *.log
 .env
 .env.*
