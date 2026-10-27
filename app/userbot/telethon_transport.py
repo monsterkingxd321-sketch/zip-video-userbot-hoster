@@ -425,9 +425,10 @@ class TelethonTransport(UserbotTransport):
                     if raw is None or attempt:
                         raw = await self._refetch_raw(media)
                     received = 0
+                    download_target = getattr(raw, "document", None) or getattr(raw, "media", None) or raw
                     async with aiofiles.open(part, "wb") as sink:
                         async for chunk in self._client.iter_download(
-                            raw, request_size=request_size
+                            download_target, request_size=request_size
                         ):
                             if cancel_check is not None and cancel_check():
                                 raise _DownloadCancelled()

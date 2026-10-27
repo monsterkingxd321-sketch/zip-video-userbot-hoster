@@ -392,13 +392,13 @@ class ZipTaskPipeline:
             )
             raise
         except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("task %s crashed: %s", task.task_id, type(exc).__name__)
+            logger.exception("task %s crashed: %s: %s", task.task_id, type(exc).__name__, exc)
             await self._finish_progress(reporter, "⛔️ The job failed unexpectedly. It was reported to the operators.")
             return await self._finalise(
                 task,
                 TaskStatus.FAILED,
                 stats,
-                {"code": "internal_error", "message": type(exc).__name__},
+                {"code": "internal_error", "message": f"{type(exc).__name__}: {exc}"},
                 started,
             )
         finally:
