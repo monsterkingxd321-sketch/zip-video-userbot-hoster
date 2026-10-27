@@ -319,7 +319,7 @@ class UserbotWorker:
             )
             try:
                 outcome = await asyncio.wait_for(
-                    pipeline.run(task, cancel_check=self._is_cancelled),
+                    pipeline.run(task, cancel_check=lambda: self._is_cancelled(task_id)),
                     timeout=max(1.0, float(self._settings.task_timeout_seconds)),
                 )
             except asyncio.TimeoutError:
